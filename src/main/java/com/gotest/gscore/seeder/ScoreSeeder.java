@@ -135,7 +135,12 @@ public class ScoreSeeder implements CommandLineRunner {
     private void insertSafe(List<Object[]> students, List<Object[]> scores, int currentLine) {
         try {
             batchInsertStudents(students);
-            batchInsertScores(scores);
+            try {
+                batchInsertScores(scores);
+            } catch (Exception e) {
+                log.error("Failed to insert scores batch at line {}: {}", currentLine, e.getMessage());
+                retryInsertScoresIndividually(scores);
+            }
             writeProgress(currentLine);
             log.info("Inserted batch ending at line {}", currentLine);
         } catch (Exception ex) {
@@ -161,4 +166,17 @@ public class ScoreSeeder implements CommandLineRunner {
             log.warn("Failed to write progress file: {}", e.getMessage());
         }
     }
+
+    private void retryInsertScoresIndividually(List<Object[]> scores) {
+        String sql = "INSERT INTO scores (sbd, subject_code, score) VALUES (?, ?, ?)";
+        for (Object[] row : scores) {
+            try {
+                jdbcTemplate.update(sql, row);
+            } catch (Exception ex) {
+                log.warn("Failed to insert score: sbd={}, subject={}, score={}. Error: {}",
+                        row[0], row[1], row[2], ex.getMessage());
+            }
+        }
+    }
+
 }
