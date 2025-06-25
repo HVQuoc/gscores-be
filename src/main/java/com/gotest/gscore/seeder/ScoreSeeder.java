@@ -6,13 +6,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
 
-import java.io.BufferedReader;
+import java.io.*;
 import java.util.*;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
 
-import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
@@ -26,19 +25,15 @@ public class ScoreSeeder implements CommandLineRunner {
 
     private static final int BATCH_SIZE = 500;
     private static final String CSV_FILE = "data/diem_thi_thpt_2024.csv";
+    private static final String PROGRESS_FILE = "seeder_progress.log";
+    private static final String ERROR_FILE = "seeder_errors.log";
 
     @Override
     public void run(String... args) throws Exception {
         log.info("=== Starting score seeder ===");
 
-        long existing = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM students", Long.class);
-        if (existing > 0) {
-            log.info("Students already exist. Skipping seeding.");
-            return;
-        }
-
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(new ClassPathResource(CSV_FILE).getInputStream(), StandardCharsets.UTF_8))) {
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(new ClassPathResource(CSV_FILE).getInputStream(), StandardCharsets.UTF_8));
+             BufferedWriter errorWriter = new BufferedWriter(new FileWriter(ERROR_FILE, true))) {
 
             String headerLine = reader.readLine();
             if (headerLine == null) {
@@ -51,6 +46,9 @@ public class ScoreSeeder implements CommandLineRunner {
 
             insertSubjectsIfNeeded(subjectCodes);
 
+            int resumeFromLine = readProgress();
+            log.info("Resuming from line {}", resumeFromLine);
+
             List<Object[]> studentBatch = new ArrayList<>();
             List<Object[]> scoreBatch = new ArrayList<>();
 
@@ -58,6 +56,9 @@ public class ScoreSeeder implements CommandLineRunner {
             int lineCount = 0;
 
             while ((line = reader.readLine()) != null) {
+                lineCount++;
+                if (lineCount <= resumeFromLine) continue; // Skip processed lines
+
                 String[] fields = line.split(",");
                 if (fields.length < 2) continue;
 
@@ -75,25 +76,22 @@ public class ScoreSeeder implements CommandLineRunner {
                         scoreBatch.add(new Object[]{sbd, subjectCode, scoreValue});
                     } catch (NumberFormatException e) {
                         log.warn("Invalid score '{}' at line {}", scoreStr, lineCount + 2);
+                        errorWriter.write("NumberFormatException -  " + lineCount + ": " + line);
+                        errorWriter.newLine();
                     }
 
                 }
 
-                lineCount++;
-
                 if (lineCount % BATCH_SIZE == 0) {
-                    batchInsertStudents(studentBatch);
-                    batchInsertScores(scoreBatch);
+                    insertSafe(studentBatch, scoreBatch, lineCount);
                     studentBatch.clear();
                     scoreBatch.clear();
-                    log.info("Seeded {} lines...", lineCount);
                 }
             }
 
             // Final batch
             if (!studentBatch.isEmpty()) {
-                batchInsertStudents(studentBatch);
-                batchInsertScores(scoreBatch);
+                insertSafe(studentBatch, scoreBatch, lineCount);
             }
 
             log.info("Seeder completed: {} lines", lineCount);
@@ -132,5 +130,35 @@ public class ScoreSeeder implements CommandLineRunner {
                 return batch.size();
             }
         });
+    }
+
+    private void insertSafe(List<Object[]> students, List<Object[]> scores, int currentLine) {
+        try {
+            batchInsertStudents(students);
+            batchInsertScores(scores);
+            writeProgress(currentLine);
+            log.info("Inserted batch ending at line {}", currentLine);
+        } catch (Exception ex) {
+            log.error("Failed to insert batch ending at line {}: {}", currentLine, ex.getMessage());
+        }
+    }
+    private int readProgress() {
+        try {
+            File f = new File(PROGRESS_FILE);
+            if (!f.exists()) return 0;
+            try (BufferedReader r = new BufferedReader(new FileReader(f))) {
+                return Integer.parseInt(r.readLine());
+            }
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    private void writeProgress(int lineNumber) {
+        try (BufferedWriter w = new BufferedWriter(new FileWriter(PROGRESS_FILE))) {
+            w.write(String.valueOf(lineNumber));
+        } catch (IOException e) {
+            log.warn("Failed to write progress file: {}", e.getMessage());
+        }
     }
 }
