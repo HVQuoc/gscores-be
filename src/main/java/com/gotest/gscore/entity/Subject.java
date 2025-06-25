@@ -11,9 +11,6 @@ import java.util.List;
 @Table(name = "subjects")
 public class Subject {
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
-
     @Column(name = "code", unique = true, nullable = false, length = 50)
     private String code; // match header "toan", "hoa_hoc"
 

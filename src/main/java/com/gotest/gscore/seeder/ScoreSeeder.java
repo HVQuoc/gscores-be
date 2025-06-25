@@ -1,12 +1,5 @@
 package com.gotest.gscore.seeder;
 
-import com.gotest.gscore.entity.Score;
-import com.gotest.gscore.entity.Student;
-import com.gotest.gscore.entity.Subject;
-import com.gotest.gscore.repository.ScoreRepo;
-import com.gotest.gscore.repository.StudentRepo;
-import com.gotest.gscore.repository.SubjectRepo;
-import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,113 +7,130 @@ import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
 
 import java.io.BufferedReader;
-import java.io.FileReader;
 import java.util.*;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.jdbc.core.BatchPreparedStatementSetter;
+import org.springframework.jdbc.core.JdbcTemplate;
+
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
 
 @Component
 @RequiredArgsConstructor
 public class ScoreSeeder implements CommandLineRunner {
 
     private static final Logger log = LoggerFactory.getLogger(ScoreSeeder.class);
+    private final JdbcTemplate jdbcTemplate;
 
-    private final StudentRepo studentRepo;
-    private final SubjectRepo subjectRepo;
-    private final ScoreRepo scoreRepo;
-
-    private static final int BATCH_SIZE = 100;
-    private static final String CSV_PATH = "src/main/resources/data/diem_thi_thpt_2024.csv";
-
+    private static final int BATCH_SIZE = 500;
+    private static final String CSV_FILE = "data/diem_thi_thpt_2024.csv";
 
     @Override
     public void run(String... args) throws Exception {
-        log.info("Checking if seeding is required...");
-        if (studentRepo.count() > 0 && subjectRepo.count() > 0) {
-            log.info("Seeding skipped: student data already exists.");
+        log.info("=== Starting score seeder ===");
+
+        long existing = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM students", Long.class);
+        if (existing > 0) {
+            log.info("Students already exist. Skipping seeding.");
             return;
         }
 
-        log.info("Seeding student scores from CSV...");
-        try (BufferedReader br = new BufferedReader(new FileReader(CSV_PATH))) {
-            String headerLine = br.readLine(); // read header
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(new ClassPathResource(CSV_FILE).getInputStream(), StandardCharsets.UTF_8))) {
+
+            String headerLine = reader.readLine();
             if (headerLine == null) {
-                log.warn("CSV is empty. Aborting.");
+                log.warn("CSV is empty");
+                return;
             }
 
             String[] headers = headerLine.split(",");
+            List<String> subjectCodes = Arrays.asList(headers);
 
-            // Create subjects (from header, skipping sbd and ma_ngoai_ngu columns)
-            Map<String, Subject> subjectMap = createSubjectsFromHeader(headers);
+            insertSubjectsIfNeeded(subjectCodes);
 
-            List<Student> students = new ArrayList<>();
-            List<Score> scores = new ArrayList<>();
+            List<Object[]> studentBatch = new ArrayList<>();
+            List<Object[]> scoreBatch = new ArrayList<>();
 
-            int lineCount = 0;
             String line;
+            int lineCount = 0;
 
-            while ((line = br.readLine()) != null) {
-                lineCount++;
+            while ((line = reader.readLine()) != null) {
                 String[] fields = line.split(",");
                 if (fields.length < 2) continue;
 
-                // Create student
-                Student student = new Student();
-                student.setSbd(fields[0]);
-                student.setMa_ngoai_ngu(fields.length > headers.length - 1 ? fields[headers.length - 1] : null);
-                students.add(student);
+                String sbd = fields[0];
+                String maNgoaiNgu = fields.length >= headers.length ? fields[headers.length - 1] : null;
 
-                // Create scores for subjects
+                studentBatch.add(new Object[]{sbd, maNgoaiNgu});
                 for (int i = 1; i < fields.length - 1; i++) {
+
+                    if (fields[i].isEmpty() || fields[i].isBlank()) continue;
                     String scoreStr = fields[i];
-                    if (scoreStr != null && !scoreStr.isEmpty()) {
-                        try {
-                            double scoreValue = Double.parseDouble(scoreStr);
-                            Score score = new Score();
-                            score.setStudent(student);
-                            score.setSubject(subjectMap.get(headers[i]));
-                            score.setScore(scoreValue);
-                            scores.add(score);
-                        } catch (NumberFormatException e) {
-                            int lineNumber = lineCount + 2; //skip header line + 1's based count
-                            log.warn("Invalid score '{}', line {}", fields[i], lineNumber);
-                        }
+                    try {
+                        double scoreValue = Double.parseDouble(scoreStr);
+                        String subjectCode = headers[i];
+                        scoreBatch.add(new Object[]{sbd, subjectCode, scoreValue});
+                    } catch (NumberFormatException e) {
+                        log.warn("Invalid score '{}' at line {}", scoreStr, lineCount + 2);
                     }
+
                 }
 
-                // Batch insert every <n = BATCH_SIZE> lines
+                lineCount++;
+
                 if (lineCount % BATCH_SIZE == 0) {
-                    persistBatch(students, scores);
-                    students.clear();
-                    scores.clear();
+                    batchInsertStudents(studentBatch);
+                    batchInsertScores(scoreBatch);
+                    studentBatch.clear();
+                    scoreBatch.clear();
+                    log.info("Seeded {} lines...", lineCount);
                 }
             }
 
-            // Save remaining
-            if (!students.isEmpty()) {
-                persistBatch(students, scores);
+            // Final batch
+            if (!studentBatch.isEmpty()) {
+                batchInsertStudents(studentBatch);
+                batchInsertScores(scoreBatch);
             }
 
-            log.info("Seeding completed. Total students: {}", lineCount);
-        } catch(Exception e) {
+            log.info("Seeder completed: {} lines", lineCount);
+
+        } catch (Exception e) {
             log.error("Seeding failed: {}", e.getMessage(), e);
         }
     }
 
-    @Transactional
-    public void persistBatch(List<Student> students, List<Score> scores) {
-        studentRepo.saveAll(students);
-        scoreRepo.saveAll(scores);
+    private void insertSubjectsIfNeeded(List<String> subjectCodes) {
+        log.info("Seeding subjects...");
+        for (int i = 1; i < subjectCodes.size() - 1; i++) {
+            String code = subjectCodes.get(i);
+            jdbcTemplate.update(
+                    "INSERT INTO subjects (code, name) VALUES (?, ?) ON CONFLICT (code) DO NOTHING",
+                    code, code
+            );
+        }
     }
 
-    private Map<String, Subject> createSubjectsFromHeader(String[] headers) {
-        Map<String, Subject> map = new HashMap<>();
-        for (int i = 1; i < headers.length - 1; i++) {
-            Subject subject = new Subject();
-            subject.setCode(headers[i]);
-            subject.setName(headers[i]);
-            Subject savedSubject = subjectRepo.save(subject);
-            map.put(headers[i], savedSubject);
-            log.info("Created subject '{}'", savedSubject.getCode());
-        }
-        return map;
+    private void batchInsertStudents(List<Object[]> batch) {
+        String sql = "INSERT INTO students (sbd, ma_ngoai_ngu) VALUES (?, ?) ON CONFLICT (sbd) DO NOTHING";
+        jdbcTemplate.batchUpdate(sql, batch);
+    }
+
+    private void batchInsertScores(List<Object[]> batch) {
+        String sql = "INSERT INTO scores (sbd, subject_code, score) VALUES (?, ?, ?)";
+        jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
+            public void setValues(PreparedStatement ps, int i) throws SQLException {
+                ps.setString(1, (String) batch.get(i)[0]);
+                ps.setString(2, (String) batch.get(i)[1]);
+                ps.setDouble(3, (Double) batch.get(i)[2]);
+            }
+
+            public int getBatchSize() {
+                return batch.size();
+            }
+        });
     }
 }
