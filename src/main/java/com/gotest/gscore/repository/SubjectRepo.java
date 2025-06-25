@@ -9,4 +9,5 @@ import java.util.Optional;
 
 @Repository
 public interface SubjectRepo extends JpaRepository<Subject, String> {
+    boolean existsByCode(String code);
 }
