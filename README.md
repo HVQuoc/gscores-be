@@ -1,6 +1,7 @@
 # G-Scores Back-end Java Service
 
 This is the instruction for web developer to run the back-end service locally.
+For a quick review, visit hosting [link](https://gscores-be.onrender.com). 
 
 # Requirements
 
