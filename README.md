@@ -22,9 +22,29 @@ For a quick review, visit hosting [link](https://gscores-be.onrender.com).
 
 - Add .env to the root base of folder structure.
 - If you use IntelliJ IDEA (recommendation), load the project into IDE then add environment configuration then click Play button.
-- If you use commandline tool, run these command in order: 'export $(grep -v '^#' .env | xargs)'; 'mvn clean package -DskipTests'; 'mvn spring-boot:run'.
+- If you use commandline tool, run these command in order:
+```
+export $(grep -v '^#' .env | xargs)
+```
+```
+mvn clean package -DskipTests
+```
+```
+mvn spring-boot:run
+```
 
-- If you use Docker, run this command: 'docker build -t gscores .'. After the image is created, run this command 'docker run --env-file .env -p 8080:8080 gscores'
+
+
+- If you use Docker, run this command to create an image:
+```
+docker build -t gscores .
+```
+
+After the image is created, run this command:
+```
+docker run --env-file .env -p 8080:8080 gscores
+```
+
 
 **GOOD LUCK!!!**
 
