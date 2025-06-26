@@ -3,6 +3,7 @@ package com.gotest.gscore.seeder;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
 
@@ -23,7 +24,8 @@ public class ScoreSeeder implements CommandLineRunner {
     private static final Logger log = LoggerFactory.getLogger(ScoreSeeder.class);
     private final JdbcTemplate jdbcTemplate;
 
-    private static final int BATCH_SIZE = 500;
+    @Value("${seeder.batch-size}")
+    private int batchSize;
     private static final String CSV_FILE = "data/diem_thi_thpt_2024.csv";
     private static final String PROGRESS_FILE = "seeder_progress.log";
     private static final String ERROR_FILE = "seeder_errors.log";
@@ -82,7 +84,7 @@ public class ScoreSeeder implements CommandLineRunner {
 
                 }
 
-                if (lineCount % BATCH_SIZE == 0) {
+                if (lineCount % batchSize == 0) {
                     insertSafe(studentBatch, scoreBatch, lineCount);
                     studentBatch.clear();
                     scoreBatch.clear();
@@ -141,7 +143,7 @@ public class ScoreSeeder implements CommandLineRunner {
                 log.error("Failed to insert scores batch at line {}: {}", currentLine, e.getMessage());
                 retryInsertScoresIndividually(scores);
             }
-            writeProgress(currentLine);
+            writeProgress(currentLine - batchSize);
             log.info("Inserted batch ending at line {}", currentLine);
         } catch (Exception ex) {
             log.error("Failed to insert batch ending at line {}: {}", currentLine, ex.getMessage());
