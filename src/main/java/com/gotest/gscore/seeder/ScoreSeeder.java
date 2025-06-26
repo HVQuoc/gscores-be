@@ -118,7 +118,7 @@ public class ScoreSeeder implements CommandLineRunner {
     }
 
     private void batchInsertScores(List<Object[]> batch) {
-        String sql = "INSERT INTO scores (sbd, subject_code, score) VALUES (?, ?, ?)";
+        String sql = "INSERT INTO scores (sbd, subject_code, score) VALUES (?, ?, ?) ON CONFLICT (sbd, subject_code) DO NOTHING";
         jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
             public void setValues(PreparedStatement ps, int i) throws SQLException {
                 ps.setString(1, (String) batch.get(i)[0]);
@@ -168,7 +168,7 @@ public class ScoreSeeder implements CommandLineRunner {
     }
 
     private void retryInsertScoresIndividually(List<Object[]> scores) {
-        String sql = "INSERT INTO scores (sbd, subject_code, score) VALUES (?, ?, ?)";
+        String sql = "INSERT INTO scores (sbd, subject_code, score) VALUES (?, ?, ?) ON CONFLICT (sbd, subject_code) DO NOTHING";
         for (Object[] row : scores) {
             try {
                 jdbcTemplate.update(sql, row);
